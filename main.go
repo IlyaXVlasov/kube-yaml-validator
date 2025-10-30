@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -242,11 +243,20 @@ func validateResourceMap(resourceMap map[string]interface{}, mapType string, res
 	for resource, value := range resourceMap {
 		switch resource {
 		case "cpu":
-			if cpu, ok := value.(int); ok {
-				if cpu <= 0 {
+			switch v := value.(type) {
+			case int:
+				if v <= 0 {
 					errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be positive integer"})
 				}
-			} else {
+			case string:
+				if cpu, err := strconv.Atoi(v); err == nil {
+					if cpu <= 0 {
+						errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be positive integer"})
+					}
+				} else {
+					errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be integer"})
+				}
+			default:
 				errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be integer"})
 			}
 
