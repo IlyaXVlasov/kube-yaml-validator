@@ -98,8 +98,15 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 	nameNode := findField(metadataNode, "name")
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s name is required", filename))
-	} else if nameNode.Value == "" {
+	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Tag == "!!null" {
+		// Обработка случая когда name: null
 		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
+	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
+		// Обработка случая когда name: ""
+		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
+	} else if nameNode.Kind != yaml.ScalarNode {
+		// Обработка случая когда name не скалярное значение
+		errors = append(errors, fmt.Sprintf("%s:%d name must be string", filename, nameNode.Line))
 	}
 	
 	return errors
@@ -143,8 +150,10 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 	nameNode := findField(containerNode, "name")
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, findFieldLine(containerNode, "name")))
-	} else if nameNode.Value == "" {
+	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
 		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, nameNode.Line))
+	} else if nameNode.Kind != yaml.ScalarNode {
+		errors = append(errors, fmt.Sprintf("%s:%d container name must be string", filename, nameNode.Line))
 	} else {
 		snakeCaseRegex := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
 		if !snakeCaseRegex.MatchString(nameNode.Value) {
@@ -156,8 +165,10 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 	imageNode := findField(containerNode, "image")
 	if imageNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d image is required", filename, findFieldLine(containerNode, "image")))
-	} else if imageNode.Value == "" {
+	} else if imageNode.Kind == yaml.ScalarNode && imageNode.Value == "" {
 		errors = append(errors, fmt.Sprintf("%s:%d image is required", filename, imageNode.Line))
+	} else if imageNode.Kind != yaml.ScalarNode {
+		errors = append(errors, fmt.Sprintf("%s:%d image must be string", filename, imageNode.Line))
 	} else {
 		if !strings.HasPrefix(imageNode.Value, "registry.bigbrother.io/") {
 			errors = append(errors, fmt.Sprintf("%s:%d image has invalid format '%s'", filename, imageNode.Line, imageNode.Value))
@@ -207,6 +218,8 @@ func validateContainerPort(portNode *yaml.Node, filename string) []string {
 	containerPortNode := findField(portNode, "containerPort")
 	if containerPortNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d containerPort is required", filename, findFieldLine(portNode, "containerPort")))
+	} else if containerPortNode.Kind != yaml.ScalarNode {
+		errors = append(errors, fmt.Sprintf("%s:%d containerPort must be int", filename, containerPortNode.Line))
 	} else {
 		if port, err := strconv.Atoi(containerPortNode.Value); err != nil {
 			errors = append(errors, fmt.Sprintf("%s:%d containerPort must be int", filename, containerPortNode.Line))
@@ -247,8 +260,10 @@ func validateHTTPGetAction(httpGetNode *yaml.Node, probeType string, filename st
 	pathNode := findField(httpGetNode, "path")
 	if pathNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, findFieldLine(httpGetNode, "path")))
-	} else if pathNode.Value == "" {
+	} else if pathNode.Kind == yaml.ScalarNode && pathNode.Value == "" {
 		errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, pathNode.Line))
+	} else if pathNode.Kind != yaml.ScalarNode {
+		errors = append(errors, fmt.Sprintf("%s:%d path must be string", filename, pathNode.Line))
 	} else if !strings.HasPrefix(pathNode.Value, "/") {
 		errors = append(errors, fmt.Sprintf("%s:%d path has invalid format '%s'", filename, pathNode.Line, pathNode.Value))
 	}
@@ -257,6 +272,8 @@ func validateHTTPGetAction(httpGetNode *yaml.Node, probeType string, filename st
 	portNode := findField(httpGetNode, "port")
 	if portNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d port is required", filename, findFieldLine(httpGetNode, "port")))
+	} else if portNode.Kind != yaml.ScalarNode {
+		errors = append(errors, fmt.Sprintf("%s:%d port must be int", filename, portNode.Line))
 	} else {
 		if port, err := strconv.Atoi(portNode.Value); err != nil {
 			errors = append(errors, fmt.Sprintf("%s:%d port must be int", filename, portNode.Line))
