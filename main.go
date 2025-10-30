@@ -25,12 +25,8 @@ type ObjectMeta struct {
 }
 
 type PodSpec struct {
-	OS        *PodOS      `yaml:"os,omitempty"`
+	OS        string      `yaml:"os,omitempty"`
 	Containers []Container `yaml:"containers"`
-}
-
-type PodOS struct {
-	Name string `yaml:"name"`
 }
 
 type Container struct {
@@ -106,9 +102,9 @@ func validateObjectMeta(meta *ObjectMeta) []ValidationError {
 func validatePodSpec(spec *PodSpec) []ValidationError {
 	var errors []ValidationError
 
-	// Валидация OS
-	if spec.OS != nil {
-		errors = append(errors, validatePodOS(spec.OS)...)
+	// Валидация OS (теперь как string)
+	if spec.OS != "" && spec.OS != "linux" && spec.OS != "windows" {
+		errors = append(errors, ValidationError{"spec.os", "must be 'linux' or 'windows'"})
 	}
 
 	// Валидация containers
@@ -119,16 +115,6 @@ func validatePodSpec(spec *PodSpec) []ValidationError {
 			containerErrors := validateContainer(&container, i)
 			errors = append(errors, containerErrors...)
 		}
-	}
-
-	return errors
-}
-
-func validatePodOS(os *PodOS) []ValidationError {
-	var errors []ValidationError
-
-	if os.Name != "linux" && os.Name != "windows" {
-		errors = append(errors, ValidationError{"spec.os.name", "must be 'linux' or 'windows'"})
 	}
 
 	return errors
