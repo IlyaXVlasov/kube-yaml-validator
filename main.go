@@ -63,57 +63,75 @@ type ResourceRequirements struct {
 type ValidationError struct {
 	Field   string
 	Message string
+	Line    int
 }
 
 func (e ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-func validatePod(pod *Pod) []ValidationError {
+// Функция для получения номера строки (упрощенная версия)
+func getLineNumber(data []byte, field string) int {
+	// Простая реализация - в реальном приложении нужно использовать более сложную логику
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.Contains(line, field+":") {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func validatePod(pod *Pod, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
 
 	// Валидация верхнего уровня
 	if pod.APIVersion != "v1" {
-		errors = append(errors, ValidationError{"apiVersion", "must be 'v1'"})
+		line := getLineNumber(data, "apiVersion")
+		errors = append(errors, ValidationError{filename, "apiVersion must be 'v1'", line})
 	}
 
 	if pod.Kind != "Pod" {
-		errors = append(errors, ValidationError{"kind", "must be 'Pod'"})
+		line := getLineNumber(data, "kind")
+		errors = append(errors, ValidationError{filename, "kind must be 'Pod'", line})
 	}
 
 	// Валидация metadata
-	errors = append(errors, validateObjectMeta(&pod.Metadata)...)
+	errors = append(errors, validateObjectMeta(&pod.Metadata, data, filename)...)
 
 	// Валидация spec
-	errors = append(errors, validatePodSpec(&pod.Spec)...)
+	errors = append(errors, validatePodSpec(&pod.Spec, data, filename)...)
 
 	return errors
 }
 
-func validateObjectMeta(meta *ObjectMeta) []ValidationError {
+func validateObjectMeta(meta *ObjectMeta, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
 
 	if meta.Name == "" {
-		errors = append(errors, ValidationError{"metadata.name", "is required"})
+		line := getLineNumber(data, "name")
+		errors = append(errors, ValidationError{filename, "name is required", line})
 	}
 
 	return errors
 }
 
-func validatePodSpec(spec *PodSpec) []ValidationError {
+func validatePodSpec(spec *PodSpec, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
 
-	// Валидация OS (теперь как string)
+	// Валидация OS
 	if spec.OS != "" && spec.OS != "linux" && spec.OS != "windows" {
-		errors = append(errors, ValidationError{"spec.os", "must be 'linux' or 'windows'"})
+		line := getLineNumber(data, "os")
+		errors = append(errors, ValidationError{filename, fmt.Sprintf("os has unsupported value '%s'", spec.OS), line})
 	}
 
 	// Валидация containers
 	if len(spec.Containers) == 0 {
-		errors = append(errors, ValidationError{"spec.containers", "at least one container is required"})
+		line := getLineNumber(data, "containers")
+		errors = append(errors, ValidationError{filename, "at least one container is required", line})
 	} else {
 		for i, container := range spec.Containers {
-			containerErrors := validateContainer(&container, i)
+			containerErrors := validateContainer(&container, i, data, filename)
 			errors = append(errors, containerErrors...)
 		}
 	}
@@ -121,124 +139,129 @@ func validatePodSpec(spec *PodSpec) []ValidationError {
 	return errors
 }
 
-func validateContainer(container *Container, index int) []ValidationError {
+func validateContainer(container *Container, index int, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
-	containerPrefix := fmt.Sprintf("spec.containers[%d]", index)
 
 	// Валидация name
 	if container.Name == "" {
-		errors = append(errors, ValidationError{containerPrefix + ".name", "is required"})
+		line := getLineNumber(data, "name")
+		errors = append(errors, ValidationError{filename, "container name is required", line})
 	} else {
 		// Проверка формата snake_case
 		snakeCaseRegex := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
 		if !snakeCaseRegex.MatchString(container.Name) {
-			errors = append(errors, ValidationError{containerPrefix + ".name", "must be in snake_case format"})
+			line := getLineNumber(data, "name")
+			errors = append(errors, ValidationError{filename, "container name must be in snake_case format", line})
 		}
 	}
 
 	// Валидация image
 	if container.Image == "" {
-		errors = append(errors, ValidationError{containerPrefix + ".image", "is required"})
+		line := getLineNumber(data, "image")
+		errors = append(errors, ValidationError{filename, "image is required", line})
 	} else {
 		// Проверка домена и тега
 		if !strings.HasPrefix(container.Image, "registry.bigbrother.io/") {
-			errors = append(errors, ValidationError{containerPrefix + ".image", "must be in domain registry.bigbrother.io"})
+			line := getLineNumber(data, "image")
+			errors = append(errors, ValidationError{filename, "image must be in domain registry.bigbrother.io", line})
 		}
 		
 		parts := strings.Split(container.Image, ":")
 		if len(parts) != 2 || parts[1] == "" {
-			errors = append(errors, ValidationError{containerPrefix + ".image", "must have version tag"})
+			line := getLineNumber(data, "image")
+			errors = append(errors, ValidationError{filename, "image must have version tag", line})
 		}
 	}
 
 	// Валидация ports
 	for i, port := range container.Ports {
-		portErrors := validateContainerPort(&port, i, containerPrefix)
+		portErrors := validateContainerPort(&port, i, data, filename)
 		errors = append(errors, portErrors...)
 	}
 
 	// Валидация probes
 	if container.ReadinessProbe != nil {
-		probeErrors := validateProbe(container.ReadinessProbe, "readinessProbe", containerPrefix)
+		probeErrors := validateProbe(container.ReadinessProbe, "readinessProbe", data, filename)
 		errors = append(errors, probeErrors...)
 	}
 
 	if container.LivenessProbe != nil {
-		probeErrors := validateProbe(container.LivenessProbe, "livenessProbe", containerPrefix)
+		probeErrors := validateProbe(container.LivenessProbe, "livenessProbe", data, filename)
 		errors = append(errors, probeErrors...)
 	}
 
 	// Валидация resources
-	errors = append(errors, validateResourceRequirements(&container.Resources, containerPrefix)...)
+	errors = append(errors, validateResourceRequirements(&container.Resources, data, filename)...)
 
 	return errors
 }
 
-func validateContainerPort(port *ContainerPort, index int, containerPrefix string) []ValidationError {
+func validateContainerPort(port *ContainerPort, index int, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
-	portPrefix := fmt.Sprintf("%s.ports[%d]", containerPrefix, index)
 
 	// Валидация containerPort
 	if port.ContainerPort <= 0 || port.ContainerPort >= 65536 {
-		errors = append(errors, ValidationError{portPrefix + ".containerPort", "must be in range 0 < x < 65536"})
+		line := getLineNumber(data, "containerPort")
+		errors = append(errors, ValidationError{filename, "containerPort value out of range", line})
 	}
 
 	// Валидация protocol
 	if port.Protocol != "" && port.Protocol != "TCP" && port.Protocol != "UDP" {
-		errors = append(errors, ValidationError{portPrefix + ".protocol", "must be 'TCP' or 'UDP'"})
+		line := getLineNumber(data, "protocol")
+		errors = append(errors, ValidationError{filename, "protocol must be 'TCP' or 'UDP'", line})
 	}
 
 	return errors
 }
 
-func validateProbe(probe *Probe, probeType string, containerPrefix string) []ValidationError {
+func validateProbe(probe *Probe, probeType string, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
-	probePrefix := containerPrefix + "." + probeType
 
 	// Валидация httpGet
-	errors = append(errors, validateHTTPGetAction(&probe.HTTPGet, probePrefix)...)
+	errors = append(errors, validateHTTPGetAction(&probe.HTTPGet, probeType, data, filename)...)
 
 	return errors
 }
 
-func validateHTTPGetAction(action *HTTPGetAction, probePrefix string) []ValidationError {
+func validateHTTPGetAction(action *HTTPGetAction, probeType string, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
 
 	if action.Path == "" {
-		errors = append(errors, ValidationError{probePrefix + ".httpGet.path", "is required"})
+		line := getLineNumber(data, "path")
+		errors = append(errors, ValidationError{filename, "path is required", line})
 	} else if !strings.HasPrefix(action.Path, "/") {
-		errors = append(errors, ValidationError{probePrefix + ".httpGet.path", "must be absolute path"})
+		line := getLineNumber(data, "path")
+		errors = append(errors, ValidationError{filename, "path must be absolute", line})
 	}
 
 	if action.Port <= 0 || action.Port >= 65536 {
-		errors = append(errors, ValidationError{probePrefix + ".httpGet.port", "must be in range 0 < x < 65536"})
+		line := getLineNumber(data, "port")
+		errors = append(errors, ValidationError{filename, "port value out of range", line})
 	}
 
 	return errors
 }
 
-func validateResourceRequirements(resources *ResourceRequirements, containerPrefix string) []ValidationError {
+func validateResourceRequirements(resources *ResourceRequirements, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
-	resourcesPrefix := containerPrefix + ".resources"
 
 	// Валидация requests
 	if resources.Requests != nil {
-		requestErrors := validateResourceMap(resources.Requests, "requests", resourcesPrefix)
+		requestErrors := validateResourceMap(resources.Requests, "requests", data, filename)
 		errors = append(errors, requestErrors...)
 	}
 
 	// Валидация limits
 	if resources.Limits != nil {
-		limitErrors := validateResourceMap(resources.Limits, "limits", resourcesPrefix)
+		limitErrors := validateResourceMap(resources.Limits, "limits", data, filename)
 		errors = append(errors, limitErrors...)
 	}
 
 	return errors
 }
 
-func validateResourceMap(resourceMap map[string]interface{}, mapType string, resourcesPrefix string) []ValidationError {
+func validateResourceMap(resourceMap map[string]interface{}, mapType string, data []byte, filename string) []ValidationError {
 	var errors []ValidationError
-	mapPrefix := resourcesPrefix + "." + mapType
 
 	for resource, value := range resourceMap {
 		switch resource {
@@ -246,31 +269,33 @@ func validateResourceMap(resourceMap map[string]interface{}, mapType string, res
 			switch v := value.(type) {
 			case int:
 				if v <= 0 {
-					errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be positive integer"})
+					line := getLineNumber(data, "cpu")
+					errors = append(errors, ValidationError{filename, "cpu must be positive integer", line})
 				}
 			case string:
-				if cpu, err := strconv.Atoi(v); err == nil {
-					if cpu <= 0 {
-						errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be positive integer"})
-					}
-				} else {
-					errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be integer"})
+				if _, err := strconv.Atoi(v); err != nil {
+					line := getLineNumber(data, "cpu")
+					errors = append(errors, ValidationError{filename, "cpu must be int", line})
 				}
 			default:
-				errors = append(errors, ValidationError{mapPrefix + ".cpu", "must be integer"})
+				line := getLineNumber(data, "cpu")
+				errors = append(errors, ValidationError{filename, "cpu must be integer", line})
 			}
 
 		case "memory":
 			if memory, ok := value.(string); ok {
 				if !isValidMemoryValue(memory) {
-					errors = append(errors, ValidationError{mapPrefix + ".memory", "must be in format with Gi, Mi, or Ki suffix"})
+					line := getLineNumber(data, "memory")
+					errors = append(errors, ValidationError{filename, "memory must be in format with Gi, Mi, or Ki suffix", line})
 				}
 			} else {
-				errors = append(errors, ValidationError{mapPrefix + ".memory", "must be string"})
+				line := getLineNumber(data, "memory")
+				errors = append(errors, ValidationError{filename, "memory must be string", line})
 			}
 
 		default:
-			errors = append(errors, ValidationError{mapPrefix + "." + resource, "unknown resource type"})
+			line := getLineNumber(data, resource)
+			errors = append(errors, ValidationError{filename, "unknown resource type", line})
 		}
 	}
 
@@ -308,12 +333,15 @@ func main() {
 	}
 
 	// Валидация
-	validationErrors := validatePod(&pod)
+	validationErrors := validatePod(&pod, data, filename)
 
 	if len(validationErrors) > 0 {
-		fmt.Fprintf(os.Stderr, "Validation failed:\n")
 		for _, err := range validationErrors {
-			fmt.Fprintf(os.Stderr, "  - %s\n", err.Error())
+			if err.Line > 0 {
+				fmt.Fprintf(os.Stderr, "%s:%d %s\n", err.Field, err.Line, err.Message)
+			} else {
+				fmt.Fprintf(os.Stderr, "%s %s\n", err.Field, err.Message)
+			}
 		}
 		os.Exit(1)
 	}
