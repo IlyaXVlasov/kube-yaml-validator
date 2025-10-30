@@ -98,14 +98,9 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 	nameNode := findField(metadataNode, "name")
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s name is required", filename))
-	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Tag == "!!null" {
-		// Обработка случая когда name: null
-		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
 	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
-		// Обработка случая когда name: ""
 		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
 	} else if nameNode.Kind != yaml.ScalarNode {
-		// Обработка случая когда name не скалярное значение
 		errors = append(errors, fmt.Sprintf("%s:%d name must be string", filename, nameNode.Line))
 	}
 	
@@ -115,14 +110,11 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 func validateSpec(specNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// Проверка os (необязательное поле)
+	// Проверка os (необязательное поле) - КАК СТРОКА
 	osNode := findField(specNode, "os")
-	if osNode != nil {
-		osNameNode := findField(osNode, "name")
-		if osNameNode != nil {
-			if osNameNode.Value != "linux" && osNameNode.Value != "windows" {
-				errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNameNode.Line, osNameNode.Value))
-			}
+	if osNode != nil && osNode.Kind == yaml.ScalarNode {
+		if osNode.Value != "linux" && osNode.Value != "windows" {
+			errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNode.Line, osNode.Value))
 		}
 	}
 	
@@ -313,14 +305,15 @@ func validateResourceMap(resourceMapNode *yaml.Node, mapType string, filename st
 			
 			switch resourceNameNode.Value {
 			case "cpu":
-				if resourceValueNode.Kind != yaml.ScalarNode {
+				// Проверяем тег YAML чтобы отличить строку от числа
+				if resourceValueNode.Tag != "!!int" {
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, resourceValueNode.Line))
-				} else if _, err := strconv.Atoi(resourceValueNode.Value); err != nil {
-					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, resourceValueNode.Line))
+				} else if cpu, err := strconv.Atoi(resourceValueNode.Value); err != nil || cpu <= 0 {
+					errors = append(errors, fmt.Sprintf("%s:%d cpu must be positive integer", filename, resourceValueNode.Line))
 				}
 				
 			case "memory":
-				if resourceValueNode.Kind != yaml.ScalarNode {
+				if resourceValueNode.Tag != "!!str" {
 					errors = append(errors, fmt.Sprintf("%s:%d memory must be string", filename, resourceValueNode.Line))
 				} else if !isValidMemoryValue(resourceValueNode.Value) {
 					errors = append(errors, fmt.Sprintf("%s:%d memory has invalid format '%s'", filename, resourceValueNode.Line, resourceValueNode.Value))
@@ -348,9 +341,7 @@ func findField(node *yaml.Node, field string) *yaml.Node {
 	
 	for i := 0; i < len(node.Content); i += 2 {
 		if i < len(node.Content) && node.Content[i].Value == field {
-			if i+1 < len(node.Content) {
-				return node.Content[i+1]
-			}
+			return node.Content[i+1]
 		}
 	}
 	return nil
