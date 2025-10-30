@@ -116,23 +116,27 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 func validateSpec(specNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// 4. PodOS (если указан) name - ОБЯЗАТЕЛЬНО
+	// os может быть строкой или объектом
 	osNode := findField(specNode, "os")
 	if osNode != nil {
-		if osNode.Kind == yaml.MappingNode {
+		if osNode.Kind == yaml.ScalarNode {
+			// os как строка - проверяем значение
+			if osNode.Value != "linux" && osNode.Value != "windows" {
+				errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNode.Line, osNode.Value))
+			}
+		} else if osNode.Kind == yaml.MappingNode {
+			// os как объект - проверяем поле name
 			osNameNode := findField(osNode, "name")
 			if osNameNode == nil {
 				errors = append(errors, fmt.Sprintf("%s:%d os name is required", filename, osNode.Line))
 			} else if osNameNode.Kind == yaml.ScalarNode {
 				if osNameNode.Value != "linux" && osNameNode.Value != "windows" {
-					// неправильное значение в поле с ограниченным набором разрешённых значений
 					errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNameNode.Line, osNameNode.Value))
 				}
-			} else {
-				errors = append(errors, fmt.Sprintf("%s:%d os name must be string", filename, osNameNode.Line))
 			}
 		} else {
-			errors = append(errors, fmt.Sprintf("%s:%d os must be object", filename, osNode.Line))
+			// Если os не скаляр и не объект - это ошибка типа
+			errors = append(errors, fmt.Sprintf("%s:%d os must be string or object", filename, osNode.Line))
 		}
 	}
 	
