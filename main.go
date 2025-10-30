@@ -143,7 +143,7 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, findFieldLine(containerNode, "name")))
 	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
-		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
+		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, nameNode.Line))
 	} else if nameNode.Kind != yaml.ScalarNode {
 		errors = append(errors, fmt.Sprintf("%s:%d container name must be string", filename, nameNode.Line))
 	} else {
@@ -239,13 +239,13 @@ func validateProbe(probeNode *yaml.Node, probeType string, filename string) []st
 	if httpGetNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d httpGet is required", filename, findFieldLine(probeNode, "httpGet")))
 	} else {
-		errors = append(errors, validateHTTPGetAction(httpGetNode, probeType, filename)...)
+		errors = append(errors, validateHTTPGetAction(httpGetNode, filename)...)
 	}
 	
 	return errors
 }
 
-func validateHTTPGetAction(httpGetNode *yaml.Node, probeType string, filename string) []string {
+func validateHTTPGetAction(httpGetNode *yaml.Node, filename string) []string {
 	var errors []string
 	
 	// path (обязательное поле)
