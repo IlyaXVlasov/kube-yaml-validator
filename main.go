@@ -143,7 +143,6 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, findFieldLine(containerNode, "name")))
 	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
-		// ИСПРАВЛЕНИЕ: должно быть "name is required"
 		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
 	} else if nameNode.Kind != yaml.ScalarNode {
 		errors = append(errors, fmt.Sprintf("%s:%d container name must be string", filename, nameNode.Line))
