@@ -25,7 +25,7 @@ type ObjectMeta struct {
 }
 
 type PodSpec struct {
-	OS        *PodOS     `yaml:"os,omitempty"`
+	OS        *PodOS      `yaml:"os,omitempty"`
 	Containers []Container `yaml:"containers"`
 }
 
@@ -148,18 +148,18 @@ func validateContainer(container Container, index int, root *yaml.Node, filename
 		}
 	}
 
-// Валидация ports
-for _, port := range container.Ports {
-    if port.ContainerPort <= 0 || port.ContainerPort >= 65536 {
-        line := findNestedLine(root, "containers", index, "containerPort")
-        errors = append(errors, fmt.Sprintf("%s:%d containerPort value out of range", filename, line))
-    }
+	// Валидация ports
+	for _, port := range container.Ports {
+		if port.ContainerPort <= 0 || port.ContainerPort >= 65536 {
+			line := findNestedLine(root, "containers", index, "containerPort")
+			errors = append(errors, fmt.Sprintf("%s:%d containerPort value out of range", filename, line))
+		}
 
-    if port.Protocol != "" && port.Protocol != "TCP" && port.Protocol != "UDP" {
-        line := findNestedLine(root, "containers", index, "protocol")
-        errors = append(errors, fmt.Sprintf("%s:%d protocol must be 'TCP' or 'UDP'", filename, line))
-    }
-}
+		if port.Protocol != "" && port.Protocol != "TCP" && port.Protocol != "UDP" {
+			line := findNestedLine(root, "containers", index, "protocol")
+			errors = append(errors, fmt.Sprintf("%s:%d protocol must be 'TCP' or 'UDP'", filename, line))
+		}
+	}
 
 	// Валидация readinessProbe
 	if container.ReadinessProbe != nil {
@@ -193,22 +193,23 @@ for _, port := range container.Ports {
 		}
 	}
 
-	// Валидация resources
+	// Валидация resources - УПРОЩЕННАЯ ВЕРСИЯ
 	if container.Resources.Limits != nil {
 		if cpu, ok := container.Resources.Limits["cpu"]; ok {
 			switch v := cpu.(type) {
 			case int:
 				if v <= 0 {
-					line := findNestedLine(root, "containers", index, "cpu")
+					// Используем приблизительный номер строки для resources
+					line := findNestedLine(root, "containers", index, "resources") + 2
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be positive integer", filename, line))
 				}
 			case string:
 				if _, err := strconv.Atoi(v); err != nil {
-					line := findNestedLine(root, "containers", index, "cpu")
+					line := findNestedLine(root, "containers", index, "resources") + 2
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, line))
 				}
 			default:
-				line := findNestedLine(root, "containers", index, "cpu")
+				line := findNestedLine(root, "containers", index, "resources") + 2
 				errors = append(errors, fmt.Sprintf("%s:%d cpu must be integer", filename, line))
 			}
 		}
@@ -219,16 +220,16 @@ for _, port := range container.Ports {
 			switch v := cpu.(type) {
 			case int:
 				if v <= 0 {
-					line := findNestedLine(root, "containers", index, "cpu")
+					line := findNestedLine(root, "containers", index, "resources") + 5
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be positive integer", filename, line))
 				}
 			case string:
 				if _, err := strconv.Atoi(v); err != nil {
-					line := findNestedLine(root, "containers", index, "cpu")
+					line := findNestedLine(root, "containers", index, "resources") + 5
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, line))
 				}
 			default:
-				line := findNestedLine(root, "containers", index, "cpu")
+				line := findNestedLine(root, "containers", index, "resources") + 5
 				errors = append(errors, fmt.Sprintf("%s:%d cpu must be integer", filename, line))
 			}
 		}
@@ -241,25 +242,25 @@ for _, port := range container.Ports {
 func findLine(root *yaml.Node, field string) int {
 	for _, doc := range root.Content {
 		for i := 0; i < len(doc.Content); i += 2 {
-			if doc.Content[i].Value == field {
+			if i < len(doc.Content) && doc.Content[i].Value == field {
 				return doc.Content[i].Line
 			}
 		}
 	}
-	return 0
+	return 1
 }
 
 func findNestedLine(root *yaml.Node, parentField string, index int, field string) int {
 	for _, doc := range root.Content {
 		for i := 0; i < len(doc.Content); i += 2 {
-			if doc.Content[i].Value == parentField {
+			if i < len(doc.Content) && doc.Content[i].Value == parentField {
 				// Находим containers
 				containersNode := doc.Content[i+1]
 				if containersNode.Kind == yaml.SequenceNode && len(containersNode.Content) > index {
 					// Находим конкретный контейнер
 					containerNode := containersNode.Content[index]
 					for j := 0; j < len(containerNode.Content); j += 2 {
-						if containerNode.Content[j].Value == field {
+						if j < len(containerNode.Content) && containerNode.Content[j].Value == field {
 							return containerNode.Content[j].Line
 						}
 					}
@@ -267,7 +268,7 @@ func findNestedLine(root *yaml.Node, parentField string, index int, field string
 			}
 		}
 	}
-	return 0
+	return 1
 }
 
 func main() {
