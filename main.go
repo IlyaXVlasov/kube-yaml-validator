@@ -98,8 +98,10 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 	nameNode := findField(metadataNode, "name")
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s name is required", filename))
-	} else if nameNode.Kind == yaml.ScalarNode && nameNode.Value == "" {
-		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
+	} else if nameNode.Kind == yaml.ScalarNode {
+		if nameNode.Value == "" {
+			errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
+		}
 	} else if nameNode.Kind != yaml.ScalarNode {
 		errors = append(errors, fmt.Sprintf("%s:%d name must be string", filename, nameNode.Line))
 	}
