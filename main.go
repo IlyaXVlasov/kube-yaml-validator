@@ -24,7 +24,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Декодируем в yaml.Node для получения информации о строках
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing YAML: %v\n", err)
@@ -47,7 +46,6 @@ func main() {
 func validateYAML(root *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// Проходим по всем документам в YAML
 	for _, doc := range root.Content {
 		if doc.Kind == yaml.MappingNode {
 			errors = append(errors, validatePod(doc, filename)...)
@@ -60,11 +58,13 @@ func validateYAML(root *yaml.Node, filename string) []string {
 func validatePod(podNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// Проверяем обязательные поля верхнего уровня
+	// 1. Поля верхнего уровня - ОБЯЗАТЕЛЬНЫ
 	apiVersionNode := findField(podNode, "apiVersion")
 	if apiVersionNode == nil {
+		// отсутствие обязательного поля — БЕЗ указания строки
 		errors = append(errors, fmt.Sprintf("%s apiVersion is required", filename))
 	} else if apiVersionNode.Value != "v1" {
+		// неправильное значение
 		errors = append(errors, fmt.Sprintf("%s:%d apiVersion must be 'v1'", filename, apiVersionNode.Line))
 	}
 	
@@ -95,14 +95,18 @@ func validatePod(podNode *yaml.Node, filename string) []string {
 func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 	var errors []string
 	
+	// 2. ObjectMeta name - ОБЯЗАТЕЛЬНО
 	nameNode := findField(metadataNode, "name")
 	if nameNode == nil {
+		// отсутствие обязательного поля — БЕЗ указания строки
 		errors = append(errors, fmt.Sprintf("%s name is required", filename))
 	} else if nameNode.Kind == yaml.ScalarNode {
-		if nameNode.Value == "" {
+		if strings.TrimSpace(nameNode.Value) == "" {
+			// поле есть но пустое - С указанием строки
 			errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, nameNode.Line))
 		}
 	} else if nameNode.Kind != yaml.ScalarNode {
+		// несоответствие типа данных
 		errors = append(errors, fmt.Sprintf("%s:%d name must be string", filename, nameNode.Line))
 	}
 	
@@ -112,18 +116,30 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 func validateSpec(specNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// Проверка os (необязательное поле) - КАК СТРОКА
+	// 4. PodOS (если указан) name - ОБЯЗАТЕЛЬНО
 	osNode := findField(specNode, "os")
-	if osNode != nil && osNode.Kind == yaml.ScalarNode {
-		if osNode.Value != "linux" && osNode.Value != "windows" {
-			errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNode.Line, osNode.Value))
+	if osNode != nil {
+		if osNode.Kind == yaml.MappingNode {
+			osNameNode := findField(osNode, "name")
+			if osNameNode == nil {
+				errors = append(errors, fmt.Sprintf("%s:%d os name is required", filename, osNode.Line))
+			} else if osNameNode.Kind == yaml.ScalarNode {
+				if osNameNode.Value != "linux" && osNameNode.Value != "windows" {
+					// неправильное значение в поле с ограниченным набором разрешённых значений
+					errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNameNode.Line, osNameNode.Value))
+				}
+			} else {
+				errors = append(errors, fmt.Sprintf("%s:%d os name must be string", filename, osNameNode.Line))
+			}
+		} else {
+			errors = append(errors, fmt.Sprintf("%s:%d os must be object", filename, osNode.Line))
 		}
 	}
 	
-	// Проверка containers (обязательное поле)
+	// 3. PodSpec containers - ОБЯЗАТЕЛЬНО
 	containersNode := findField(specNode, "containers")
 	if containersNode == nil {
-		errors = append(errors, fmt.Sprintf("%s:%d at least one container is required", filename, findFieldLine(specNode, "containers")))
+		errors = append(errors, fmt.Sprintf("%s containers is required", filename))
 	} else if containersNode.Kind == yaml.SequenceNode {
 		if len(containersNode.Content) == 0 {
 			errors = append(errors, fmt.Sprintf("%s:%d at least one container is required", filename, containersNode.Line))
@@ -132,6 +148,8 @@ func validateSpec(specNode *yaml.Node, filename string) []string {
 				errors = append(errors, validateContainer(containerNode, i, filename)...)
 			}
 		}
+	} else {
+		errors = append(errors, fmt.Sprintf("%s:%d containers must be array", filename, containersNode.Line))
 	}
 	
 	return errors
@@ -140,7 +158,7 @@ func validateSpec(specNode *yaml.Node, filename string) []string {
 func validateContainer(containerNode *yaml.Node, index int, filename string) []string {
 	var errors []string
 	
-	// Проверка name (обязательное поле)
+	// 5. Container name - ОБЯЗАТЕЛЬНО
 	nameNode := findField(containerNode, "name")
 	if nameNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, findFieldLine(containerNode, "name")))
@@ -151,11 +169,12 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 	} else {
 		snakeCaseRegex := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
 		if !snakeCaseRegex.MatchString(nameNode.Value) {
+			// неправильный формат строки
 			errors = append(errors, fmt.Sprintf("%s:%d container name has invalid format '%s'", filename, nameNode.Line, nameNode.Value))
 		}
 	}
 	
-	// Проверка image (обязательное поле)
+	// 5. Container image - ОБЯЗАТЕЛЬНО
 	imageNode := findField(containerNode, "image")
 	if imageNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d image is required", filename, findFieldLine(containerNode, "image")))
@@ -174,27 +193,31 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 		}
 	}
 	
-	// Проверка ports (необязательное поле)
+	// 6. ContainerPort (если указан) containerPort - ОБЯЗАТЕЛЬНО
 	portsNode := findField(containerNode, "ports")
-	if portsNode != nil && portsNode.Kind == yaml.SequenceNode {
-		for _, portNode := range portsNode.Content {
-			errors = append(errors, validateContainerPort(portNode, filename)...)
+	if portsNode != nil {
+		if portsNode.Kind == yaml.SequenceNode {
+			for _, portNode := range portsNode.Content {
+				errors = append(errors, validateContainerPort(portNode, filename)...)
+			}
+		} else {
+			errors = append(errors, fmt.Sprintf("%s:%d ports must be array", filename, portsNode.Line))
 		}
 	}
 	
-	// Проверка readinessProbe (необязательное поле)
+	// 7. Probe (если указан) httpGet - ОБЯЗАТЕЛЬНО
 	readinessProbeNode := findField(containerNode, "readinessProbe")
 	if readinessProbeNode != nil {
 		errors = append(errors, validateProbe(readinessProbeNode, "readinessProbe", filename)...)
 	}
 	
-	// Проверка livenessProbe (необязательное поле)
+	// 7. Probe (если указан) httpGet - ОБЯЗАТЕЛЬНО
 	livenessProbeNode := findField(containerNode, "livenessProbe")
 	if livenessProbeNode != nil {
 		errors = append(errors, validateProbe(livenessProbeNode, "livenessProbe", filename)...)
 	}
 	
-	// Проверка resources (обязательное поле)
+	// 5. Container resources - ОБЯЗАТЕЛЬНО
 	resourcesNode := findField(containerNode, "resources")
 	if resourcesNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d resources are required", filename, findFieldLine(containerNode, "resources")))
@@ -208,7 +231,7 @@ func validateContainer(containerNode *yaml.Node, index int, filename string) []s
 func validateContainerPort(portNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// containerPort (обязательное поле)
+	// 6. ContainerPort containerPort - ОБЯЗАТЕЛЬНО
 	containerPortNode := findField(portNode, "containerPort")
 	if containerPortNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d containerPort is required", filename, findFieldLine(portNode, "containerPort")))
@@ -218,13 +241,14 @@ func validateContainerPort(portNode *yaml.Node, filename string) []string {
 		if port, err := strconv.Atoi(containerPortNode.Value); err != nil {
 			errors = append(errors, fmt.Sprintf("%s:%d containerPort must be int", filename, containerPortNode.Line))
 		} else if port <= 0 || port >= 65536 {
+			// числовое значение за пределами разрешённых значений
 			errors = append(errors, fmt.Sprintf("%s:%d containerPort value out of range", filename, containerPortNode.Line))
 		}
 	}
 	
-	// protocol (необязательное поле)
+	// protocol - НЕОБЯЗАТЕЛЬНО
 	protocolNode := findField(portNode, "protocol")
-	if protocolNode != nil && protocolNode.Value != "" {
+	if protocolNode != nil && protocolNode.Kind == yaml.ScalarNode && protocolNode.Value != "" {
 		if protocolNode.Value != "TCP" && protocolNode.Value != "UDP" {
 			errors = append(errors, fmt.Sprintf("%s:%d protocol has unsupported value '%s'", filename, protocolNode.Line, protocolNode.Value))
 		}
@@ -236,7 +260,7 @@ func validateContainerPort(portNode *yaml.Node, filename string) []string {
 func validateProbe(probeNode *yaml.Node, probeType string, filename string) []string {
 	var errors []string
 	
-	// httpGet (обязательное поле для probe)
+	// 7. Probe httpGet - ОБЯЗАТЕЛЬНО
 	httpGetNode := findField(probeNode, "httpGet")
 	if httpGetNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d httpGet is required", filename, findFieldLine(probeNode, "httpGet")))
@@ -250,7 +274,7 @@ func validateProbe(probeNode *yaml.Node, probeType string, filename string) []st
 func validateHTTPGetAction(httpGetNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// path (обязательное поле)
+	// 8. HTTPGetAction path - ОБЯЗАТЕЛЬНО
 	pathNode := findField(httpGetNode, "path")
 	if pathNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, findFieldLine(httpGetNode, "path")))
@@ -262,7 +286,7 @@ func validateHTTPGetAction(httpGetNode *yaml.Node, filename string) []string {
 		errors = append(errors, fmt.Sprintf("%s:%d path has invalid format '%s'", filename, pathNode.Line, pathNode.Value))
 	}
 	
-	// port (обязательное поле)
+	// 8. HTTPGetAction port - ОБЯЗАТЕЛЬНО
 	portNode := findField(httpGetNode, "port")
 	if portNode == nil {
 		errors = append(errors, fmt.Sprintf("%s:%d port is required", filename, findFieldLine(httpGetNode, "port")))
@@ -272,6 +296,7 @@ func validateHTTPGetAction(httpGetNode *yaml.Node, filename string) []string {
 		if port, err := strconv.Atoi(portNode.Value); err != nil {
 			errors = append(errors, fmt.Sprintf("%s:%d port must be int", filename, portNode.Line))
 		} else if port <= 0 || port >= 65536 {
+			// числовое значение за пределами разрешённых значений
 			errors = append(errors, fmt.Sprintf("%s:%d port value out of range", filename, portNode.Line))
 		}
 	}
@@ -282,16 +307,16 @@ func validateHTTPGetAction(httpGetNode *yaml.Node, filename string) []string {
 func validateResourceRequirements(resourcesNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// limits (необязательное поле)
-	limitsNode := findField(resourcesNode, "limits")
-	if limitsNode != nil {
-		errors = append(errors, validateResourceMap(limitsNode, "limits", filename)...)
-	}
-	
-	// requests (необязательное поле)
+	// resources.requests - НЕОБЯЗАТЕЛЬНО
 	requestsNode := findField(resourcesNode, "requests")
 	if requestsNode != nil {
 		errors = append(errors, validateResourceMap(requestsNode, "requests", filename)...)
+	}
+	
+	// resources.limits - НЕОБЯЗАТЕЛЬНО
+	limitsNode := findField(resourcesNode, "limits")
+	if limitsNode != nil {
+		errors = append(errors, validateResourceMap(limitsNode, "limits", filename)...)
 	}
 	
 	return errors
@@ -307,7 +332,6 @@ func validateResourceMap(resourceMapNode *yaml.Node, mapType string, filename st
 			
 			switch resourceNameNode.Value {
 			case "cpu":
-				// Проверяем тег YAML чтобы отличить строку от числа
 				if resourceValueNode.Tag != "!!int" {
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, resourceValueNode.Line))
 				} else if cpu, err := strconv.Atoi(resourceValueNode.Value); err != nil || cpu <= 0 {
@@ -318,6 +342,7 @@ func validateResourceMap(resourceMapNode *yaml.Node, mapType string, filename st
 				if resourceValueNode.Tag != "!!str" {
 					errors = append(errors, fmt.Sprintf("%s:%d memory must be string", filename, resourceValueNode.Line))
 				} else if !isValidMemoryValue(resourceValueNode.Value) {
+					// неправильный формат строки
 					errors = append(errors, fmt.Sprintf("%s:%d memory has invalid format '%s'", filename, resourceValueNode.Line, resourceValueNode.Value))
 				}
 				
@@ -335,7 +360,6 @@ func isValidMemoryValue(memory string) bool {
 	return memoryRegex.MatchString(memory)
 }
 
-// Вспомогательные функции для работы с yaml.Node
 func findField(node *yaml.Node, field string) *yaml.Node {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
