@@ -10,7 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Структуры для декодирования YAML
+// Структуры для данных
 type Pod struct {
 	APIVersion string     `yaml:"apiVersion"`
 	Kind       string     `yaml:"kind"`
@@ -25,8 +25,12 @@ type ObjectMeta struct {
 }
 
 type PodSpec struct {
-	OS        string      `yaml:"os,omitempty"`
+	OS        *PodOS     `yaml:"os,omitempty"`
 	Containers []Container `yaml:"containers"`
+}
+
+type PodOS struct {
+	Name string `yaml:"name"`
 }
 
 type Container struct {
@@ -57,35 +61,54 @@ type ResourceRequirements struct {
 	Limits   map[string]interface{} `yaml:"limits,omitempty"`
 }
 
-// Валидаторы
-func validatePod(pod *Pod, filename string) []string {
+// Валидация с использованием yaml.Node
+func validateYAML(data []byte, filename string) []string {
 	var errors []string
 
-	// Валидация верхнего уровня
+	// Парсим в yaml.Node для получения информации о строках
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return []string{fmt.Sprintf("Error parsing YAML: %v", err)}
+	}
+
+	// Парсим в структуру Pod для валидации
+	var pod Pod
+	if err := yaml.Unmarshal(data, &pod); err != nil {
+		return []string{fmt.Sprintf("Error parsing YAML: %v", err)}
+	}
+
+	// Валидируем поля верхнего уровня
 	if pod.APIVersion != "v1" {
-		errors = append(errors, fmt.Sprintf("%s:4 apiVersion must be 'v1'", filename))
+		line := findLine(&root, "apiVersion")
+		errors = append(errors, fmt.Sprintf("%s:%d apiVersion must be 'v1'", filename, line))
 	}
 
 	if pod.Kind != "Pod" {
-		errors = append(errors, fmt.Sprintf("%s:2 kind must be 'Pod'", filename))
+		line := findLine(&root, "kind")
+		errors = append(errors, fmt.Sprintf("%s:%d kind must be 'Pod'", filename, line))
 	}
 
 	// Валидация metadata
 	if pod.Metadata.Name == "" {
-		errors = append(errors, fmt.Sprintf("%s:4 name is required", filename))
+		line := findLine(&root, "name")
+		errors = append(errors, fmt.Sprintf("%s:%d name is required", filename, line))
 	}
 
-	// Валидация spec OS
-	if pod.Spec.OS != "" && pod.Spec.OS != "linux" && pod.Spec.OS != "windows" {
-		errors = append(errors, fmt.Sprintf("%s:10 os has unsupported value '%s'", filename, pod.Spec.OS))
+	// Валидация spec.os
+	if pod.Spec.OS != nil {
+		if pod.Spec.OS.Name != "linux" && pod.Spec.OS.Name != "windows" {
+			line := findLine(&root, "os")
+			errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, line, pod.Spec.OS.Name))
+		}
 	}
 
 	// Валидация containers
 	if len(pod.Spec.Containers) == 0 {
-		errors = append(errors, fmt.Sprintf("%s:12 at least one container is required", filename))
+		line := findLine(&root, "containers")
+		errors = append(errors, fmt.Sprintf("%s:%d at least one container is required", filename, line))
 	} else {
 		for i, container := range pod.Spec.Containers {
-			containerErrors := validateContainer(&container, i, filename)
+			containerErrors := validateContainer(container, i, &root, filename)
 			errors = append(errors, containerErrors...)
 		}
 	}
@@ -93,132 +116,120 @@ func validatePod(pod *Pod, filename string) []string {
 	return errors
 }
 
-func validateContainer(container *Container, index int, filename string) []string {
+func validateContainer(container Container, index int, root *yaml.Node, filename string) []string {
 	var errors []string
-	lineOffset := 12 + index * 20 // Примерное вычисление строки
 
-	// Валидация name
+	// Валидация имени контейнера
 	if container.Name == "" {
-		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, lineOffset+1))
+		line := findNestedLine(root, "containers", index, "name")
+		errors = append(errors, fmt.Sprintf("%s:%d container name is required", filename, line))
 	} else {
 		snakeCaseRegex := regexp.MustCompile(`^[a-z]+(_[a-z]+)*$`)
 		if !snakeCaseRegex.MatchString(container.Name) {
-			errors = append(errors, fmt.Sprintf("%s:%d container name must be in snake_case format", filename, lineOffset+1))
+			line := findNestedLine(root, "containers", index, "name")
+			errors = append(errors, fmt.Sprintf("%s:%d container name must be in snake_case format", filename, line))
 		}
 	}
 
 	// Валидация image
 	if container.Image == "" {
-		errors = append(errors, fmt.Sprintf("%s:%d image is required", filename, lineOffset+2))
+		line := findNestedLine(root, "containers", index, "image")
+		errors = append(errors, fmt.Sprintf("%s:%d image is required", filename, line))
 	} else {
 		if !strings.HasPrefix(container.Image, "registry.bigbrother.io/") {
-			errors = append(errors, fmt.Sprintf("%s:%d image must be in domain registry.bigbrother.io", filename, lineOffset+2))
+			line := findNestedLine(root, "containers", index, "image")
+			errors = append(errors, fmt.Sprintf("%s:%d image must be in domain registry.bigbrother.io", filename, line))
 		}
 		
 		parts := strings.Split(container.Image, ":")
 		if len(parts) != 2 || parts[1] == "" {
-			errors = append(errors, fmt.Sprintf("%s:%d image must have version tag", filename, lineOffset+2))
+			line := findNestedLine(root, "containers", index, "image")
+			errors = append(errors, fmt.Sprintf("%s:%d image must have version tag", filename, line))
 		}
 	}
 
-	// Валидация ports
-	for i, port := range container.Ports {
-		portErrors := validateContainerPort(&port, i, filename, lineOffset+4+i)
-		errors = append(errors, portErrors...)
-	}
+// Валидация ports
+for _, port := range container.Ports {
+    if port.ContainerPort <= 0 || port.ContainerPort >= 65536 {
+        line := findNestedLine(root, "containers", index, "containerPort")
+        errors = append(errors, fmt.Sprintf("%s:%d containerPort value out of range", filename, line))
+    }
 
-	// Валидация probes
+    if port.Protocol != "" && port.Protocol != "TCP" && port.Protocol != "UDP" {
+        line := findNestedLine(root, "containers", index, "protocol")
+        errors = append(errors, fmt.Sprintf("%s:%d protocol must be 'TCP' or 'UDP'", filename, line))
+    }
+}
+
+	// Валидация readinessProbe
 	if container.ReadinessProbe != nil {
-		probeErrors := validateProbe(container.ReadinessProbe, "readinessProbe", filename, lineOffset+8)
-		errors = append(errors, probeErrors...)
+		if container.ReadinessProbe.HTTPGet.Port <= 0 || container.ReadinessProbe.HTTPGet.Port >= 65536 {
+			line := findNestedLine(root, "containers", index, "port")
+			errors = append(errors, fmt.Sprintf("%s:%d port value out of range", filename, line))
+		}
+
+		if container.ReadinessProbe.HTTPGet.Path == "" {
+			line := findNestedLine(root, "containers", index, "path")
+			errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, line))
+		} else if !strings.HasPrefix(container.ReadinessProbe.HTTPGet.Path, "/") {
+			line := findNestedLine(root, "containers", index, "path")
+			errors = append(errors, fmt.Sprintf("%s:%d path must be absolute", filename, line))
+		}
 	}
 
+	// Валидация livenessProbe
 	if container.LivenessProbe != nil {
-		probeErrors := validateProbe(container.LivenessProbe, "livenessProbe", filename, lineOffset+12)
-		errors = append(errors, probeErrors...)
+		if container.LivenessProbe.HTTPGet.Port <= 0 || container.LivenessProbe.HTTPGet.Port >= 65536 {
+			line := findNestedLine(root, "containers", index, "port")
+			errors = append(errors, fmt.Sprintf("%s:%d port value out of range", filename, line))
+		}
+
+		if container.LivenessProbe.HTTPGet.Path == "" {
+			line := findNestedLine(root, "containers", index, "path")
+			errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, line))
+		} else if !strings.HasPrefix(container.LivenessProbe.HTTPGet.Path, "/") {
+			line := findNestedLine(root, "containers", index, "path")
+			errors = append(errors, fmt.Sprintf("%s:%d path must be absolute", filename, line))
+		}
 	}
 
 	// Валидация resources
-	resourceErrors := validateResourceRequirements(&container.Resources, filename, lineOffset+16)
-	errors = append(errors, resourceErrors...)
-
-	return errors
-}
-
-func validateContainerPort(port *ContainerPort, index int, filename string, line int) []string {
-	var errors []string
-
-	if port.ContainerPort <= 0 || port.ContainerPort >= 65536 {
-		errors = append(errors, fmt.Sprintf("%s:%d containerPort value out of range", filename, line))
-	}
-
-	if port.Protocol != "" && port.Protocol != "TCP" && port.Protocol != "UDP" {
-		errors = append(errors, fmt.Sprintf("%s:%d protocol must be 'TCP' or 'UDP'", filename, line+1))
-	}
-
-	return errors
-}
-
-func validateProbe(probe *Probe, probeType string, filename string, line int) []string {
-	var errors []string
-
-	if probe.HTTPGet.Path == "" {
-		errors = append(errors, fmt.Sprintf("%s:%d path is required", filename, line+1))
-	} else if !strings.HasPrefix(probe.HTTPGet.Path, "/") {
-		errors = append(errors, fmt.Sprintf("%s:%d path must be absolute", filename, line+1))
-	}
-
-	if probe.HTTPGet.Port <= 0 || probe.HTTPGet.Port >= 65536 {
-		errors = append(errors, fmt.Sprintf("%s:%d port value out of range", filename, line+2))
-	}
-
-	return errors
-}
-
-func validateResourceRequirements(resources *ResourceRequirements, filename string, line int) []string {
-	var errors []string
-
-	// Валидация limits
-	if resources.Limits != nil {
-		limitErrors := validateResourceMap(resources.Limits, "limits", filename, line+1)
-		errors = append(errors, limitErrors...)
-	}
-
-	// Валидация requests
-	if resources.Requests != nil {
-		requestErrors := validateResourceMap(resources.Requests, "requests", filename, line+4)
-		errors = append(errors, requestErrors...)
-	}
-
-	return errors
-}
-
-func validateResourceMap(resourceMap map[string]interface{}, mapType string, filename string, line int) []string {
-	var errors []string
-
-	for resource, value := range resourceMap {
-		switch resource {
-		case "cpu":
-			switch v := value.(type) {
+	if container.Resources.Limits != nil {
+		if cpu, ok := container.Resources.Limits["cpu"]; ok {
+			switch v := cpu.(type) {
 			case int:
 				if v <= 0 {
+					line := findNestedLine(root, "containers", index, "cpu")
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be positive integer", filename, line))
 				}
 			case string:
 				if _, err := strconv.Atoi(v); err != nil {
+					line := findNestedLine(root, "containers", index, "cpu")
 					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, line))
 				}
 			default:
+				line := findNestedLine(root, "containers", index, "cpu")
 				errors = append(errors, fmt.Sprintf("%s:%d cpu must be integer", filename, line))
 			}
+		}
+	}
 
-		case "memory":
-			if memory, ok := value.(string); ok {
-				if !isValidMemoryValue(memory) {
-					errors = append(errors, fmt.Sprintf("%s:%d memory must be in format with Gi, Mi, or Ki suffix", filename, line+1))
+	if container.Resources.Requests != nil {
+		if cpu, ok := container.Resources.Requests["cpu"]; ok {
+			switch v := cpu.(type) {
+			case int:
+				if v <= 0 {
+					line := findNestedLine(root, "containers", index, "cpu")
+					errors = append(errors, fmt.Sprintf("%s:%d cpu must be positive integer", filename, line))
 				}
-			} else {
-				errors = append(errors, fmt.Sprintf("%s:%d memory must be string", filename, line+1))
+			case string:
+				if _, err := strconv.Atoi(v); err != nil {
+					line := findNestedLine(root, "containers", index, "cpu")
+					errors = append(errors, fmt.Sprintf("%s:%d cpu must be int", filename, line))
+				}
+			default:
+				line := findNestedLine(root, "containers", index, "cpu")
+				errors = append(errors, fmt.Sprintf("%s:%d cpu must be integer", filename, line))
 			}
 		}
 	}
@@ -226,12 +237,39 @@ func validateResourceMap(resourceMap map[string]interface{}, mapType string, fil
 	return errors
 }
 
-func isValidMemoryValue(memory string) bool {
-	memoryRegex := regexp.MustCompile(`^\d+(Gi|Mi|Ki)$`)
-	return memoryRegex.MatchString(memory)
+// Вспомогательные функции для поиска номеров строк
+func findLine(root *yaml.Node, field string) int {
+	for _, doc := range root.Content {
+		for i := 0; i < len(doc.Content); i += 2 {
+			if doc.Content[i].Value == field {
+				return doc.Content[i].Line
+			}
+		}
+	}
+	return 0
 }
 
-// Основная логика приложения
+func findNestedLine(root *yaml.Node, parentField string, index int, field string) int {
+	for _, doc := range root.Content {
+		for i := 0; i < len(doc.Content); i += 2 {
+			if doc.Content[i].Value == parentField {
+				// Находим containers
+				containersNode := doc.Content[i+1]
+				if containersNode.Kind == yaml.SequenceNode && len(containersNode.Content) > index {
+					// Находим конкретный контейнер
+					containerNode := containersNode.Content[index]
+					for j := 0; j < len(containerNode.Content); j += 2 {
+						if containerNode.Content[j].Value == field {
+							return containerNode.Content[j].Line
+						}
+					}
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintf(os.Stderr, "Usage: %s <yaml-file>\n", os.Args[0])
@@ -247,22 +285,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Декодирование YAML
-	var pod Pod
-	if err := yaml.Unmarshal(data, &pod); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing YAML: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Отладочный вывод
-	fmt.Fprintf(os.Stderr, "DEBUG: Name='%s', OS='%s', Containers=%d\n", 
-		pod.Metadata.Name, pod.Spec.OS, len(pod.Spec.Containers))
-
 	// Валидация
-	validationErrors := validatePod(&pod, filename)
+	errors := validateYAML(data, filename)
 
-	if len(validationErrors) > 0 {
-		for _, err := range validationErrors {
+	if len(errors) > 0 {
+		for _, err := range errors {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		os.Exit(1)
