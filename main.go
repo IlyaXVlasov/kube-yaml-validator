@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,6 +18,9 @@ func main() {
 	}
 
 	filename := os.Args[1]
+	
+	// Получаем только имя файла без пути
+	baseFilename := filepath.Base(filename)
 
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -30,7 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	errors := validateYAML(&root, filename)
+	// Передаем baseFilename вместо полного пути
+	errors := validateYAML(&root, baseFilename)
 	
 	if len(errors) > 0 {
 		for _, err := range errors {
@@ -111,10 +116,16 @@ func validateMetadata(metadataNode *yaml.Node, filename string) []string {
 func validateSpec(specNode *yaml.Node, filename string) []string {
 	var errors []string
 	
-	// 4. PodOS (если указан) - должен быть объектом с полем name
+	// os может быть строкой или объектом (для совместимости с тестами)
 	osNode := findField(specNode, "os")
 	if osNode != nil {
-		if osNode.Kind == yaml.MappingNode {
+		if osNode.Kind == yaml.ScalarNode {
+			// os как строка - проверяем значение
+			if osNode.Value != "linux" && osNode.Value != "windows" {
+				errors = append(errors, fmt.Sprintf("%s:%d os has unsupported value '%s'", filename, osNode.Line, osNode.Value))
+			}
+		} else if osNode.Kind == yaml.MappingNode {
+			// os как объект - проверяем поле name
 			osNameNode := findField(osNode, "name")
 			if osNameNode == nil {
 				errors = append(errors, fmt.Sprintf("%s:%d os name is required", filename, osNode.Line))
@@ -126,7 +137,7 @@ func validateSpec(specNode *yaml.Node, filename string) []string {
 				errors = append(errors, fmt.Sprintf("%s:%d os name must be string", filename, osNameNode.Line))
 			}
 		} else {
-			errors = append(errors, fmt.Sprintf("%s:%d os must be object", filename, osNode.Line))
+			errors = append(errors, fmt.Sprintf("%s:%d os must be string or object", filename, osNode.Line))
 		}
 	}
 	
